@@ -732,6 +732,14 @@
         </div>
 
         <div style="margin-top:14px;">
+          <label for="paletteArrayInput">컬러 배열 가져오기</label>
+          <textarea id="paletteArrayInput" rows="3" style="min-height:76px;" placeholder='["#606c38","#283618","#fefae0","#dda15e","#bc6c25"]'></textarea>
+          <p class="desc" style="font-size:12px;">순서: 대분류 배경 · 대분류 글자 · 본문 배경 · 본문 글자 · 접기 배경 · 접기 글자 · 박스 배경 · 박스 글자.<br>생략된 1~4번은 현재 색 유지. 생략된 5번은 1번, 6·7번은 2번, 8번은 4번을 사용합니다. 8개 초과 시 앞의 8개만 적용합니다.</p>
+          <button type="button" id="applyPaletteArrayBtn" style="margin-top:8px;">배열 적용</button>
+          <p id="paletteArrayStatus" class="desc" role="status" style="font-size:12px;margin-top:6px;"></p>
+        </div>
+
+        <div style="margin-top:14px;">
           <span class="field-label">따옴표 배경 불투명도 (0~1)</span>
           <p class="desc" style="font-size:12px;">0 완전 투명 · 1 불투명. 현재 선택한 스타일의 값을 조절하며, 스타일별 값이 팔레트에 함께 저장됩니다.</p>
           <label for="doubleQuoteTransparency">큰따옴표 · <span id="doubleQuoteTransparencyStyle"></span></label>
@@ -1194,6 +1202,25 @@
     syncColorControls();
     renderPalettes();
     renderAll();
+  }
+
+  function paletteFromArray(value, base) {
+    const colors = JSON.parse(value);
+    if (!Array.isArray(colors) || !colors.length) throw new Error('색상 배열을 입력해주세요. 예: ["#606c38", "#283618"]');
+    const selected = colors.slice(0, 8);
+    if (selected.some(color => typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color.trim()))) {
+      throw new Error('각 색상은 "#606c38"처럼 #과 6자리 색상 코드로 입력해주세요.');
+    }
+    const keys = ['sectionBg', 'sectionText', 'paperBg', 'bodyText', 'detailsBg', 'detailsText', 'boxBg', 'boxText'];
+    const next = clonePalette(base);
+    for (let i = 0; i < 4; i++) {
+      if (selected[i] !== undefined) next[keys[i]] = selected[i].trim().toUpperCase();
+    }
+    const fallbackKeys = ['sectionBg', 'sectionText', 'sectionText', 'bodyText'];
+    for (let i = 4; i < 8; i++) {
+      next[keys[i]] = selected[i] === undefined ? next[fallbackKeys[i - 4]] : selected[i].trim().toUpperCase();
+    }
+    return next;
   }
 
   function updateCustomColor(key, value) {
@@ -1961,6 +1988,15 @@ ${indent}</table>`;
     };
   }
 
+  function headingTitleRow(title, collapsible) {
+    if (!collapsible) return title;
+    // inline-block summary suppresses the built-in list marker; the chevron
+    // shares the title row. No state selectors or transforms in exported HTML.
+    return `<span style="display: inline-flex; width: 100%; vertical-align: top;">` +
+      `<span style="display: inline-block; width: calc(100% - 1.3em);">${title}</span>` +
+      `<span style="display: inline-block; width: 1.3em; text-align: right; font-weight: normal;">〉</span></span>`;
+  }
+
   function renderBodyCommands(text, p) {
     const blocks = parseBodyCommands(text);
     const out = [];
@@ -1975,10 +2011,10 @@ ${indent}</table>`;
         if (middleOpen) out.push('<details style="margin: 0 0 20px;">');
         const headingTag = middleOpen ? 'summary' : 'div';
         out.push(
-`  <${headingTag} style="margin: 0 0 20px; padding: 0 0 11px; border-bottom: 2px solid ${p.sectionBg}; font-size: 16px; line-height: normal;${fontStyle('title')}">
+`  <${headingTag} style="${middleOpen ? 'display: inline-block; width: 100%; ' : ''}margin: 0 0 20px; padding: 0 0 11px; border-bottom: 2px solid ${p.sectionBg}; font-size: 16px; line-height: normal;${fontStyle('title')}">
     <span style="font-size: 0.72em; font-weight: bold; letter-spacing: 3px; color: ${p.sectionBg}; text-transform: uppercase;">TOPIC</span>
     <br>
-    <span style="font-size: 1.32em; font-weight: bold; line-height: 1.4;">${displayText(block.title, '중분류 제목')}</span>
+    <span style="display: inline-block; width: 100%; font-size: 1.32em; font-weight: bold; line-height: 1.4;">${headingTitleRow(displayText(block.title, '중분류 제목'), middleOpen)}</span>
   </${headingTag}>`
         );
         return;
@@ -2591,9 +2627,11 @@ ${titleHtml}${bodyHtml}
 
         const headingTag = sectionOpen ? 'summary' : 'div';
         out.push(
-`<${headingTag} style="background: ${p.sectionBg}; padding: 24px 24px; color: ${p.sectionText};${fontStyle('title')}">
+`<${headingTag} style="display: inline-block; width: 100%; vertical-align: top; background: ${p.sectionBg}; color: ${p.sectionText};${fontStyle('title')}">
+  <span style="display: inline-block; width: calc(100% - 48px); margin: 24px;">
   <span style="display: inline-block; margin: 0; font-size: 0.76em; font-weight: bold; letter-spacing: 4px; text-transform: uppercase;">${escapeHtml(label)} ${num}</span><br>
-  <span style="display: inline-block; margin: 6px 0 0; font-size: clamp(1.6em, 5vw, 2.1em); font-weight: bold; line-height: 1.2; letter-spacing: -1px;">${displayText(block.text, '대분류 제목')}</span>
+  <span style="display: inline-block; width: 100%; margin: 6px 0 0; font-size: clamp(1.6em, 5vw, 2.1em); font-weight: bold; line-height: 1.2; letter-spacing: -1px;">${headingTitleRow(displayText(block.text, '대분류 제목'), sectionOpen)}</span>
+  </span>
 </${headingTag}>`
         );
 
@@ -2735,6 +2773,17 @@ ${fragment}
     });
     input.addEventListener('change', syncQuoteTransparencyControls);
     input.addEventListener('blur', syncQuoteTransparencyControls);
+  });
+
+  document.getElementById('applyPaletteArrayBtn').addEventListener('click', () => {
+    const feedback = document.getElementById('paletteArrayStatus');
+    try {
+      const next = paletteFromArray(document.getElementById('paletteArrayInput').value, currentPalette);
+      applyPalette(next, null);
+      feedback.textContent = '배열을 적용했습니다. 컬러칩에서 더 조절한 뒤 팔레트로 저장할 수 있습니다.';
+    } catch (error) {
+      feedback.textContent = error instanceof SyntaxError ? 'JSON 배열 문법을 확인해주세요. 색상은 큰따옴표로 감싸주세요.' : error.message;
+    }
   });
 
   document.getElementById('savePaletteBtn').addEventListener('click', () => {
