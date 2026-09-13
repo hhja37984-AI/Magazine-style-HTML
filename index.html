@@ -657,6 +657,7 @@
               <span>첫 문단 드롭캡 (반응형)</span>
             </label>
 
+            <label class="dropcap-row"><input type="checkbox" id="toggleMiddleDropCap"><span>중분류 아래에도 드롭캡 (본문 드롭캡 ON일 때)</span></label>
             <p class="desc" style="font-size:12px;">첫 글자는 두 줄 높이로 강조하고, 본문은 화면 폭에 맞춰 자연스럽게 이어집니다.</p>
 
             <div class="typography-row">
@@ -894,6 +895,7 @@
 
   let typographyOptions = {
     dropCap: false,
+    middleDropCap: false,
     bodyFontSize: 16,
     bodyLineHeight: 1.85
   };
@@ -912,7 +914,7 @@
   let nextId = 1;
 
   const defaults = {
-    section: { label: 'SECTION', text: '' },
+    section: { label: 'SECTION', text: '', collapsible: false },
     body: { label: '', text: '' }
   };
 
@@ -949,6 +951,7 @@
 
   function syncTypographyControls() {
     toggleDropCap.checked = !!typographyOptions.dropCap;
+    document.getElementById("toggleMiddleDropCap").checked = !!typographyOptions.middleDropCap;
     bodyFontSizeRange.value = typographyOptions.bodyFontSize;
     bodyFontSizeNumber.value = typographyOptions.bodyFontSize;
     bodyLineHeightRange.value = typographyOptions.bodyLineHeight;
@@ -966,37 +969,41 @@
   function extractDropCapParts(html) {
     const container = document.createElement('div');
     container.innerHTML = String(html || '');
-
-    const walker = document.createTreeWalker(
-      container,
-      NodeFilter.SHOW_TEXT
-    );
-
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const nodes = [];
     let node;
-
-    while ((node = walker.nextNode())) {
-      const match = node.data.match(/\S/u);
-      if (!match) continue;
-
-      const charIndex = match.index;
-      const tail = node.data.slice(charIndex);
-      const first = typeof Intl.Segmenter === 'function'
-        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(tail)[Symbol.iterator]().next().value.segment
-        : Array.from(tail)[0] || '';
-      node.data =
-        node.data.slice(0, charIndex) +
-        node.data.slice(charIndex + first.length);
-
-      return {
-        first,
-        remainderHtml: container.innerHTML
-      };
+    while ((node = walker.nextNode())) nodes.push(node);
+    const text = nodes.map(n => n.data).join('');
+    const start = text.search(/\S/u);
+    if (start < 0) return { first: '', remainderHtml: container.innerHTML };
+    let position = 0;
+    const firstNode = nodes.find(n => {
+      const found = position + n.data.length > start;
+      if (!found) position += n.data.length;
+      return found;
+    });
+    // An inline-code opening consumes this paragraph's opportunity without
+    // removing a character from the code or moving the drop cap later.
+    for (let element = firstNode.parentElement; element && element !== container; element = element.parentElement) {
+      if (element.style.fontFamily === 'monospace') return { first: '', remainderHtml: container.innerHTML };
     }
-
-    return {
-      first: '',
-      remainderHtml: container.innerHTML
-    };
+    const tail = text.slice(start);
+    const chars = typeof Intl.Segmenter === 'function'
+      ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(tail), x => x.segment)
+      : Array.from(tail);
+    const pairs = { '"': '"', "'": "'", '“': '”', '‘': '’' };
+    const opening = chars[0];
+    const paired = pairs[opening] && chars[1] && /\S/u.test(chars[1]) && tail.indexOf(pairs[opening], opening.length + chars[1].length) >= 0;
+    const first = paired ? opening + chars[1] : opening;
+    const end = start + first.length;
+    position = 0;
+    for (const n of nodes) {
+      const length = n.data.length;
+      const from = Math.max(0, start - position), to = Math.min(length, end - position);
+      if (to > from) n.data = n.data.slice(0, from) + n.data.slice(to);
+      position += length;
+    }
+    return { first, remainderHtml: container.innerHTML };
   }
 
   function makeDropCapMeasureRoot(width) {
@@ -1382,11 +1389,25 @@
       return token;
     });
 
+    const linkTokens = [];
+    escaped = escaped.replace(/&amp;&amp;([^\n]+?)&amp;&amp;([^\s]+)&amp;/g, (whole, label, encodedUrl) => {
+      const decoder = document.createElement('textarea');
+      decoder.innerHTML = encodedUrl;
+      const url = decoder.value.trim();
+      if (!/^(https?:\/\/|mailto:)/i.test(url) || /[\u0000-\u0020]/.test(url)) return whole;
+      const token = `%%LINK_${linkTokens.length}%%`;
+      linkTokens.push(`<a href="${escapeHtml(url)}" style="color: inherit; text-decoration: underline;">${label}</a>`);
+      return token;
+    });
+
     escaped = escaped.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     escaped = escaped.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
     escaped = renderQuoteSpans(escaped);
     escaped = escaped.replaceAll('\n', '<br>');
 
+    linkTokens.forEach((html, index) => {
+      escaped = escaped.replace(`%%LINK_${index}%%`, html);
+    });
     codeTokens.forEach((html, index) => {
       escaped = escaped.replace(`%%INLINE_CODE_${index}%%`, html);
     });
@@ -1683,10 +1704,11 @@ ${indent}</table>`;
 
     if (!blocks.length) return '';
 
-    let dropCapApplied = false;
+    const dropCapState = renderMeta.dropCapState || { pending: !!renderMeta.dropCap };
 
     return blocks.map((block, index) => {
       const isLast = index === blocks.length - 1;
+      if (block.type !== "paragraph") dropCapState.pending = false;
 
       if (block.type === 'code') {
         return `${indent}<div style="${codeStyle}">${block.html}</div>`;
@@ -1732,9 +1754,9 @@ ${indent}</table>`;
       const style = isLast ? paragraphLastStyle : paragraphStyle;
       let paragraphHtml = block.html;
 
-      if (renderMeta.dropCap && !dropCapApplied && block.type === 'paragraph') {
+      if (dropCapState.pending && block.type === 'paragraph') {
         paragraphHtml = applyDropCapToHtml(paragraphHtml);
-        dropCapApplied = true;
+        dropCapState.pending = false;
       }
 
       return `${indent}<p style="${style}">${paragraphHtml}</p>`;
@@ -1820,13 +1842,14 @@ ${indent}</table>`;
       }
 
       if (!inFence) {
-        let match = trimmed.match(/^\/중(?:\s+(.*))?$/);
+        let match = trimmed.match(/^\/중(\(접\))?(?:\s+(.*))?$/);
 
         if (match) {
           flushRegular();
           blocks.push({
             type: 'middle',
-            title: (match[1] || '').trim()
+            collapsible: !!match[1],
+            title: (match[2] || '').trim()
           });
           index += 1;
           continue;
@@ -1941,15 +1964,22 @@ ${indent}</table>`;
   function renderBodyCommands(text, p) {
     const blocks = parseBodyCommands(text);
     const out = [];
+    const dropCapState = { pending: !!typographyOptions.dropCap };
+    let middleOpen = false;
 
     blocks.forEach(block => {
       if (block.type === 'middle') {
+        if (middleOpen) out.push('</details>');
+        middleOpen = !!block.collapsible;
+        if (typographyOptions.dropCap && typographyOptions.middleDropCap) dropCapState.pending = true;
+        if (middleOpen) out.push('<details style="margin: 0 0 20px;">');
+        const headingTag = middleOpen ? 'summary' : 'div';
         out.push(
-`  <div style="margin: 0 0 20px; padding: 0 0 11px; border-bottom: 2px solid ${p.sectionBg}; font-size: 16px; line-height: normal;${fontStyle('title')}">
+`  <${headingTag} style="margin: 0 0 20px; padding: 0 0 11px; border-bottom: 2px solid ${p.sectionBg}; font-size: 16px; line-height: normal;${fontStyle('title')}">
     <span style="font-size: 0.72em; font-weight: bold; letter-spacing: 3px; color: ${p.sectionBg}; text-transform: uppercase;">TOPIC</span>
     <br>
     <span style="font-size: 1.32em; font-weight: bold; line-height: 1.4;">${displayText(block.title, '중분류 제목')}</span>
-  </div>`
+  </${headingTag}>`
         );
         return;
       }
@@ -1975,8 +2005,8 @@ ${indent}</table>`;
         out.push(
 `  <div style="margin: 0 0 24px;">
     <details>
-      <summary style="padding: 11px 14px; background: ${p.detailsBg}; color: ${p.detailsText}; border-radius: 6px; font-size: 16px; font-weight: bold; line-height: 1.5;${fontStyle('title')}">${displayText(block.title, '접기 제목')}</summary>
-      <div style="padding: 15px 16px; background: ${hexToRgba(p.detailsBg, 0.28)}; border: 1px solid ${hexToRgba(p.detailsText, 0.18)}; border-top: none; border-radius: 0 0 6px 6px; color: ${p.detailsText};">
+      <summary style="padding: 9px 12px; background: ${p.detailsBg}; color: ${p.detailsText}; border-radius: 4px 4px 0 0; font-size: 16px; font-weight: bold; line-height: 1.5;${fontStyle('title')}">${displayText(block.title, '접기 제목')}</summary>
+      <div style="padding: 12px 13px; background: ${hexToRgba(p.detailsBg, 0.28)}; border: 1px solid ${hexToRgba(p.detailsText, 0.10)}; border-top: none; border-radius: 0 0 4px 4px; color: ${p.detailsText};">
 ${detailContent}
       </div>
     </details>
@@ -2001,7 +2031,7 @@ ${detailContent}
         ) || '    <p style="margin: 0; line-height: 1.75;">&nbsp;</p>';
 
         out.push(
-`  <div style="margin: 0 0 24px; padding: 15px 16px; background: ${p.boxBg}; border: 1px solid ${hexToRgba(p.boxText, 0.22)}; border-radius: 6px; color: ${p.boxText};">
+`  <div style="margin: 0 0 24px; padding: 12px 13px; background: ${p.boxBg}; border: 1px solid ${hexToRgba(p.boxText, 0.12)}; border-radius: 4px; color: ${p.boxText};">
 ${titleHtml}${bodyHtml}
   </div>`
         );
@@ -2015,12 +2045,13 @@ ${titleHtml}${bodyHtml}
         `margin: 0 0 24px; padding: 14px 15px; background: ${hexToRgba(p.bodyText, 0.10)}; border-radius: 6px; color: ${p.bodyText}; font-family: monospace; font-size: 0.94em; line-height: 1.65;`,
         '  ',
         bodyCommandTableTheme('body', p),
-        { dropCap: typographyOptions.dropCap }
+        { dropCapState }
       );
 
       if (markdownHtml) out.push(markdownHtml);
     });
 
+    if (middleOpen) out.push('</details>');
     return out.join('\n\n');
   }
 
@@ -2102,7 +2133,8 @@ ${titleHtml}${bodyHtml}
       id: nextId++,
       type,
       label: defaults[type].label,
-      text: defaults[type].text
+      text: defaults[type].text,
+      ...(type === 'section' ? { collapsible: false } : {})
     };
   }
 
@@ -2338,6 +2370,14 @@ ${titleHtml}${bodyHtml}
     card.append(head);
 
     if (block.type === 'section') {
+      const foldLabel = document.createElement('label');
+      foldLabel.className = 'dropcap-row';
+      const foldInput = document.createElement('input');
+      foldInput.type = 'checkbox';
+      foldInput.checked = !!block.collapsible;
+      foldInput.addEventListener('change', () => { block.collapsible = foldInput.checked; renderAll(); });
+      foldLabel.append(foldInput, document.createTextNode('대분류 접기'));
+      card.append(foldLabel);
       addTextInput(
         card,
         '작은 라벨',
@@ -2395,6 +2435,18 @@ ${titleHtml}${bodyHtml}
 
     const commands = [
       {
+        label: '/중(접)',
+        snippet: '/중(접) 중분류 제목\n',
+        selectOffset: 6,
+        selectLength: '중분류 제목'.length
+      },
+      {
+        label: '링크',
+        snippet: '&&링크 달 텍스트&&https://example.com&',
+        selectOffset: 2,
+        selectLength: '링크 달 텍스트'.length
+      },
+      {
         label: '/중',
         snippet: '/중 중분류 제목\n',
         selectOffset: 3,
@@ -2441,7 +2493,7 @@ ${titleHtml}${bodyHtml}
 
     const hint = document.createElement('p');
     hint.className = 'syntax-hint';
-    hint.textContent = '/중 제목 · /소 제목 · /접 제목 … //접 · /박 → 【선택 제목】 → 내용 … //박 · 따옴표/리스트 렌더링은 상단에서 ON/OFF';
+    hint.textContent = '/중(접) 제목: 다음 중분류 전까지 접기 · &&텍스트&&https://주소&: 링크 · /중 제목 · /소 제목 · /접 제목 … //접 · /박 → 【선택 제목】 → 내용 … //박 · 따옴표/리스트 렌더링은 상단에서 ON/OFF';
     card.append(hint);
 
     return card;
@@ -2512,6 +2564,7 @@ ${titleHtml}${bodyHtml}
     const out = [];
     let paperOpen = false;
     let sectionNo = 0;
+    let sectionOpen = false;
 
     function openPaper() {
       if (paperOpen) return;
@@ -2528,16 +2581,20 @@ ${titleHtml}${bodyHtml}
     state.forEach(block => {
       if (block.type === 'section') {
         closePaper();
+        if (sectionOpen) out.push('</details>');
+        sectionOpen = !!block.collapsible;
+        if (sectionOpen) out.push('<details>');
         sectionNo += 1;
 
         const label = (block.label || 'SECTION').trim();
         const num = String(sectionNo).padStart(2, '0');
 
+        const headingTag = sectionOpen ? 'summary' : 'div';
         out.push(
-`<div style="background: ${p.sectionBg}; padding: 24px 24px; color: ${p.sectionText};${fontStyle('title')}">
-  <p style="margin: 0; font-size: 0.76em; font-weight: bold; letter-spacing: 4px; text-transform: uppercase;">${escapeHtml(label)} ${num}</p>
-  <p style="margin: 6px 0 0; font-size: clamp(1.6em, 5vw, 2.1em); font-weight: bold; line-height: 1.2; letter-spacing: -1px;">${displayText(block.text, '대분류 제목')}</p>
-</div>`
+`<${headingTag} style="background: ${p.sectionBg}; padding: 24px 24px; color: ${p.sectionText};${fontStyle('title')}">
+  <span style="display: inline-block; margin: 0; font-size: 0.76em; font-weight: bold; letter-spacing: 4px; text-transform: uppercase;">${escapeHtml(label)} ${num}</span><br>
+  <span style="display: inline-block; margin: 6px 0 0; font-size: clamp(1.6em, 5vw, 2.1em); font-weight: bold; line-height: 1.2; letter-spacing: -1px;">${displayText(block.text, '대분류 제목')}</span>
+</${headingTag}>`
         );
 
         return;
@@ -2553,6 +2610,7 @@ ${titleHtml}${bodyHtml}
     });
 
     closePaper();
+    if (sectionOpen) out.push('</details>');
 
     return `<div style="width: clamp(0px, 100%, ${outputWidth}px); margin: ${getOutputMargin()};">\n${out.join('\n\n')}\n</div>`;
   }
@@ -2824,6 +2882,12 @@ ${fragment}
     renderAll();
   });
 
+  document.getElementById("toggleMiddleDropCap").addEventListener("change", e => {
+    typographyOptions.middleDropCap = e.target.checked;
+    saveTypographyOptions();
+    renderAll();
+  });
+
   function setBodyFontSize(value) {
     typographyOptions.bodyFontSize = Math.round(
       clampNumber(value, 12, 28, 16) * 10
@@ -2905,6 +2969,7 @@ ${fragment}
 
       typographyOptions = {
         dropCap: parsedTypography.dropCap === true,
+        middleDropCap: parsedTypography.middleDropCap === true,
         bodyFontSize: clampNumber(migratedBodyFontSize, 12, 28, 16),
         bodyLineHeight: clampNumber(parsedTypography.bodyLineHeight, 1.2, 2.4, 1.85)
       };
