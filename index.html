@@ -502,6 +502,31 @@
     line-height: 1.5;
   }
 
+  .decoration-guide {
+    margin-top: 14px;
+    border: 1px solid #ddd7d1;
+    border-radius: 10px;
+    background: #f8f6f3;
+    padding: 12px;
+  }
+
+  .decoration-guide h3 {
+    margin: 0 0 7px;
+    font-size: .9rem;
+  }
+
+  .decoration-guide code {
+    display: inline-block;
+    margin: 2px 3px 2px 0;
+    border: 1px solid #d8d1ca;
+    border-radius: 999px;
+    background: #fff;
+    padding: 3px 7px;
+    color: #504943;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .73rem;
+  }
+
   .preview-wrap {
     background: #e9e6e2;
     border-radius: 10px;
@@ -577,7 +602,7 @@
     <h1>매거진 HTML 제조기</h1>
     <p class="desc">
       대분류는 하나의 그룹을 만들고, 그 아래에는 본문 블록만 배치합니다.
-      본문 안에서 /중, /소, /접…//접, /박…//박 명령으로 편집 요소를 바로 삽입할 수 있습니다.
+      본문 안에서 /중, /소, /접…//접, /박…//박 명령과 미니 라벨·필·태그·메타행·인덱스·짧은선·구분선을 바로 삽입할 수 있습니다.
       기존 Markdown의 **볼드**, *이탤릭*, `인라인 코드`, ```코드블럭```, 표에 더해 큰따옴표·작은따옴표·인용 블럭(> )·순서/비순서 리스트 렌더링도 선택적으로 사용할 수 있습니다.
       팔레트, 지면 폭(px), 지면 전체 정렬도 직접 조절할 수 있습니다. 생성 HTML은 본문 공통 타이포그래피를 상위 지면에 한 번만 선언합니다.
     </p>
@@ -764,6 +789,20 @@
           <button type="button" id="loadPaletteBtn">불러오기</button>
           <button type="button" id="deletePaletteBtn" class="danger">삭제</button>
         </div>
+      </div>
+    </div>
+
+    <div class="decoration-guide">
+      <h3>지면 장식 명령</h3>
+      <p class="desc" style="font-size:12px;">본문 편집기의 버튼으로 삽입하거나 직접 입력합니다. 모든 장식은 현재 팔레트와 글꼴을 따라가며, 실제 출력에는 아카라이브 허용 범위의 인라인 CSS만 사용합니다.</p>
+      <div style="margin-top:7px;">
+        <code>/미니 작은 텍스트</code>
+        <code>/필 PILL</code>
+        <code>/태그 TAG</code>
+        <code>/메타 LEFT | RIGHT</code>
+        <code>/인덱스 01 | FIELD NOTE</code>
+        <code>/짧은선 좌·중·우</code>
+        <code>/구분선</code>
       </div>
     </div>
   </section>
@@ -1869,7 +1908,78 @@ ${indent}</table>`;
       }
 
       if (!inFence) {
-        let match = trimmed.match(/^\/중(\(접\))?(?:\s+(.*))?$/);
+        let match = trimmed.match(/^\/미니(?:\s+(.*))?$/);
+
+        if (match) {
+          flushRegular();
+          blocks.push({ type: 'micro', text: (match[1] || '').trim() });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/필(?:\s+(.*))?$/);
+
+        if (match) {
+          flushRegular();
+          blocks.push({ type: 'pill', text: (match[1] || '').trim() });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/태그(?:\s+(.*))?$/);
+
+        if (match) {
+          flushRegular();
+          blocks.push({ type: 'tag', text: (match[1] || '').trim() });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/메타(?:\s+(.*))?$/);
+
+        if (match) {
+          flushRegular();
+          const parts = (match[1] || '').split('|');
+          blocks.push({
+            type: 'meta',
+            left: (parts.shift() || '').trim(),
+            right: parts.join('|').trim()
+          });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/인덱스(?:\s+(.*))?$/);
+
+        if (match) {
+          flushRegular();
+          const parts = (match[1] || '').split('|');
+          blocks.push({
+            type: 'index',
+            number: (parts.shift() || '').trim(),
+            text: parts.join('|').trim()
+          });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/짧은선(?:\s+(좌|중|우))?$/);
+
+        if (match) {
+          flushRegular();
+          blocks.push({ type: 'shortRule', align: match[1] || '중' });
+          index += 1;
+          continue;
+        }
+
+        if (/^\/구분선$/.test(trimmed)) {
+          flushRegular();
+          blocks.push({ type: 'divider' });
+          index += 1;
+          continue;
+        }
+
+        match = trimmed.match(/^\/중(\(접\))?(?:\s+(.*))?$/);
 
         if (match) {
           flushRegular();
@@ -2004,6 +2114,59 @@ ${indent}</table>`;
     let middleOpen = false;
 
     blocks.forEach(block => {
+      if (block.type === 'micro') {
+        out.push(
+`  <div style="margin: 0 0 12px; color: ${p.sectionBg}; font-size: 0.72em; font-weight: bold; line-height: 1.4; letter-spacing: 3px; text-transform: uppercase;${fontStyle('title')}">${displayText(block.text, 'SMALL NOTE')}</div>`
+        );
+        return;
+      }
+
+      if (block.type === 'pill') {
+        out.push(
+`  <div style="margin: 0 0 14px; line-height: 1;"><span style="display: inline-block; padding: 6px 11px; background: ${p.sectionBg}; border: 1px solid ${p.sectionBg}; border-radius: 999px; color: ${p.sectionText}; font-size: 0.72em; font-weight: bold; line-height: 1.2; letter-spacing: 1.5px;${fontStyle('title')}">${displayText(block.text, 'PILL')}</span></div>`
+        );
+        return;
+      }
+
+      if (block.type === 'tag') {
+        out.push(
+`  <div style="margin: 0 0 14px; line-height: 1;"><span style="display: inline-block; padding: 5px 9px; background: ${hexToRgba(p.paperBg, 0.18)}; border: 1px solid ${hexToRgba(p.bodyText, 0.62)}; border-radius: 5px; color: ${p.bodyText}; font-size: 0.7em; font-weight: bold; line-height: 1.2; letter-spacing: 1px;${fontStyle('title')}">${displayText(block.text, 'TAG')}</span></div>`
+        );
+        return;
+      }
+
+      if (block.type === 'meta') {
+        out.push(
+`  <div style="display: table; width: 100%; margin: 0 0 18px; padding: 7px 0; border-top: 1px solid ${hexToRgba(p.bodyText, 0.42)}; border-bottom: 1px solid ${hexToRgba(p.bodyText, 0.42)}; color: ${hexToRgba(p.bodyText, 0.78)}; font-size: 0.68em; font-weight: bold; line-height: 1.35; letter-spacing: 1.6px;${fontStyle('title')}">
+    <span style="display: table-cell; width: 50%; vertical-align: middle; text-align: left;">${displayText(block.left, 'VOLUME / NOTE')}</span>
+    <span style="display: table-cell; width: 50%; vertical-align: middle; text-align: right;">${displayText(block.right, 'ISSUE 01')}</span>
+  </div>`
+        );
+        return;
+      }
+
+      if (block.type === 'index') {
+        out.push(
+`  <div style="margin: 0 0 18px; line-height: 1;"><span style="display: inline-flex; vertical-align: middle; padding: 4px 11px 4px 4px; background: ${hexToRgba(p.sectionBg, 0.14)}; border: 1px solid ${hexToRgba(p.sectionBg, 0.38)}; border-radius: 999px; color: ${p.bodyText};${fontStyle('title')}"><span style="display: inline-block; min-width: 25px; height: 25px; margin-right: 8px; padding: 0 5px; background: ${p.sectionBg}; border-radius: 999px; color: ${p.sectionText}; font-size: 0.68em; font-weight: bold; line-height: 25px; text-align: center;">${displayText(block.number, '01')}</span><span style="display: inline-block; font-size: 0.72em; font-weight: bold; line-height: 25px; letter-spacing: 1.2px;">${displayText(block.text, 'FIELD NOTE')}</span></span></div>`
+        );
+        return;
+      }
+
+      if (block.type === 'shortRule') {
+        const ruleMargin = block.align === '좌' ? '22px auto 22px 0' : block.align === '우' ? '22px 0 22px auto' : '22px auto';
+        out.push(
+`  <div style="width: 64px; height: 0; margin: ${ruleMargin}; border-top: 2px solid ${p.sectionBg}; font-size: 0; line-height: 0;">&nbsp;</div>`
+        );
+        return;
+      }
+
+      if (block.type === 'divider') {
+        out.push(
+`  <hr style="margin: 28px 0; border: 0; border-top: 1px solid ${hexToRgba(p.bodyText, 0.46)};">`
+        );
+        return;
+      }
+
       if (block.type === 'middle') {
         if (middleOpen) out.push('</details>');
         middleOpen = !!block.collapsible;
@@ -2452,7 +2615,7 @@ ${titleHtml}${bodyHtml}
     const textarea = document.createElement('textarea');
     textarea.className = 'body-editor';
     textarea.value = block.text;
-    textarea.placeholder = '본문 작성 · /중 · /소 · /접…//접 · /박…//박 · Markdown/표/> 인용 지원';
+    textarea.placeholder = '본문 작성 · /중 · /소 · /접…//접 · /박…//박 · /미니 · /필 · /태그 · /메타 · /인덱스 · /짧은선 · /구분선';
     textarea.addEventListener('input', e => {
       block.text = e.target.value;
       renderAll();
@@ -2505,6 +2668,48 @@ ${titleHtml}${bodyHtml}
         snippet: '/박\n【】\n\n//박',
         selectOffset: 4,
         selectLength: 0
+      },
+      {
+        label: '/미니',
+        snippet: '/미니 작은 텍스트\n',
+        selectOffset: 4,
+        selectLength: '작은 텍스트'.length
+      },
+      {
+        label: '/필',
+        snippet: '/필 PILL\n',
+        selectOffset: 3,
+        selectLength: 'PILL'.length
+      },
+      {
+        label: '/태그',
+        snippet: '/태그 TAG\n',
+        selectOffset: 4,
+        selectLength: 'TAG'.length
+      },
+      {
+        label: '/메타',
+        snippet: '/메타 LEFT | RIGHT\n',
+        selectOffset: 4,
+        selectLength: 'LEFT | RIGHT'.length
+      },
+      {
+        label: '/인덱스',
+        snippet: '/인덱스 01 | FIELD NOTE\n',
+        selectOffset: 5,
+        selectLength: '01 | FIELD NOTE'.length
+      },
+      {
+        label: '/짧은선',
+        snippet: '/짧은선 중\n',
+        selectOffset: 5,
+        selectLength: 1
+      },
+      {
+        label: '/구분선',
+        snippet: '/구분선\n',
+        selectOffset: null,
+        selectLength: 0
       }
     ];
 
@@ -2529,7 +2734,7 @@ ${titleHtml}${bodyHtml}
 
     const hint = document.createElement('p');
     hint.className = 'syntax-hint';
-    hint.textContent = '/중(접) 제목: 다음 중분류 전까지 접기 · &&텍스트&&https://주소&: 링크 · /중 제목 · /소 제목 · /접 제목 … //접 · /박 → 【선택 제목】 → 내용 … //박 · 따옴표/리스트 렌더링은 상단에서 ON/OFF';
+    hint.textContent = '구조: /중(접) · /중 · /소 · /접…//접 · /박…//박 · 장식: /미니 · /필 · /태그 · /메타 왼쪽 | 오른쪽 · /인덱스 번호 | 문구 · /짧은선 좌·중·우 · /구분선 · 링크: &&텍스트&&https://주소&';
     card.append(hint);
 
     return card;
